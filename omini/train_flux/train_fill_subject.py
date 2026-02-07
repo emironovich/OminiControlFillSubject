@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw
 
 from datasets import load_dataset
 
-from OminiControlFillSubject.omini.train_flux.train_subject import Subject200KDataset
+from .train_subject import Subject200KDataset
 
 from .trainer import OminiModel, get_config, train
 from ..pipeline.flux_omini import Condition, generate
@@ -230,7 +230,7 @@ def main():
     torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
 
     # Initialize raw dataset
-    raw_dataset = load_dataset("Yuanshi/Subjects200K")
+    raw_dataset = load_dataset("/export/scratch/emironov/datasets/Subjects200K")
 
     # Define filter function to filter out low-quality images from Subjects200K
     def filter_func(item):
@@ -242,12 +242,12 @@ def main():
         )
 
     # Filter dataset
-    if not os.path.exists("./cache/dataset"):
-        os.makedirs("./cache/dataset")
+    if not os.path.exists("/export/scratch/emironov/cache/dataset"):
+        os.makedirs("/export/scratch/emironov/cache/dataset")
     data_valid = raw_dataset["train"].filter(
         filter_func,
         num_proc=16,
-        cache_file_name="./cache/dataset/data_valid.arrow",
+        cache_file_name="/export/scratch/emironov/cache/dataset/data_valid.arrow",
     )
 
     # Initialize the dataset
