@@ -129,7 +129,7 @@ def test_function(model, save_path, file_name):
     for i, c_type in enumerate(condition_type):
         if c_type == "subject":
             image = Image.open("assets/test_in.jpg")
-            image = image.resize(condition_size)
+            image = image.resize(condition_size).convert("RGB")
             # More details about position delta can be found in the documentation.
             position_delta = np.array([0, -condition_size[0] // 16])
 
@@ -142,9 +142,10 @@ def test_function(model, save_path, file_name):
             mask = Image.new("L", image.size, 0)
             draw = ImageDraw.Draw(mask)
             draw.rectangle([x1, y1, x2, y2], fill=255)
+            mask = Image.eval(mask, lambda a: 255 - a)
             condition_img = Image.composite(
                 image, Image.new("RGB", image.size, (0, 0, 0)), mask
-            )
+            ).convert("RGB")
             position_delta = np.array([0, 0])
             condition = Condition(condition_img, model.adapter_names[i + 2], position_delta)
         condition_list.append(condition)
@@ -161,7 +162,7 @@ def test_function(model, save_path, file_name):
             # More details about position delta can be found in the documentation.
             position_delta = np.array([0, -condition_size[0] // 16])
 
-            condition = Condition(image, model.adapter_names[i + 2], position_delta)
+            condition = Condition(image.convert("RGB"), model.adapter_names[i + 2], position_delta)
         else:
             image = Image.open("assets/room_corner.jpg")
             image = image.resize(condition_size)
@@ -170,9 +171,10 @@ def test_function(model, save_path, file_name):
             mask = Image.new("L", image.size, 0)
             draw = ImageDraw.Draw(mask)
             draw.rectangle([x1, y1, x2, y2], fill=255)
+            mask = Image.eval(mask, lambda a: 255 - a)
             condition_img = Image.composite(
                 image, Image.new("RGB", image.size, (0, 0, 0)), mask
-            )
+            ).convert("RGB")
             position_delta = np.array([0, 0])
             condition = Condition(condition_img, model.adapter_names[i + 2], position_delta)
         condition_list.append(condition)
@@ -189,13 +191,13 @@ def test_function(model, save_path, file_name):
             # More details about position delta can be found in the documentation.
             position_delta = np.array([0, -condition_size[0] // 16])
 
-            condition = Condition(image, model.adapter_names[i + 2], position_delta)
+            condition = Condition(image.convert("RGB"), model.adapter_names[i + 2], position_delta)
         else:
             # this image already has a mask
             image = Image.open("assets/85_0000061.jpg")
             image = image.resize(condition_size)
             position_delta = np.array([0, 0])
-            condition = Condition(image, model.adapter_names[i + 2], position_delta)
+            condition = Condition(image.convert("RGB"), model.adapter_names[i + 2], position_delta)
         condition_list.append(condition)
 
     test_list.append((condition_list, prompt))
@@ -218,7 +220,7 @@ def test_function(model, save_path, file_name):
             model_config=model.model_config,
             kv_cache=model.model_config.get("independent_condition", False),
         )
-        file_path = os.path.join(save_path, f"{file_name}_{condition_type}_{i}.jpg")
+        file_path = os.path.join(save_path, f"{file_name}_fill_subject_{i}.jpg")
         res.images[0].save(file_path)
 
 
