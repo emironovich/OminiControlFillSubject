@@ -139,7 +139,7 @@ def test_function(model, save_path, file_name):
         condition_img = Image.composite(
             condition_img, Image.new("RGB", condition_img.size, (0, 0, 0)), mask
         )
-        condition = Condition(condition, adapter, position_delta, position_scale)
+        condition = Condition(condition_img, adapter, position_delta, position_scale)
         test_list.append((condition, "A beautiful vase on a table."))
     elif condition_type == "super_resolution":
         image = Image.open("assets/vase_hq.jpg")
