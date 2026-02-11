@@ -3,22 +3,44 @@ import os
 import random
 import numpy as np
 from torch.utils.data import DataLoader, Dataset
+import torchvision.transforms as T
 
 from PIL import Image, ImageDraw
 
 from datasets import load_dataset, concatenate_datasets
 
-from .train_subject import Subject200KDataset
-
 from .trainer import OminiModel, get_config, train
 from ..pipeline.flux_omini import Condition, generate
-import sys
-sys.path.append("/export/home/emironov/scripts/02_synset")
-
-from synset2hugging_face import synset2hugging_face
-
 
 class FillSubjectDataset(Dataset):
+    def __init__(
+        self,
+        base_dataset,
+        condition_size=(512, 512),
+        target_size=(512, 512),
+        image_size: int = 512,
+        padding: int = 0,
+        condition_type: list = ["subject", "fill"],
+        drop_text_prob: float = 0.1,
+        drop_image_prob: float = 0.1,
+        return_pil_image: bool = False,
+    ):
+        self.base_dataset = base_dataset
+        self.condition_size = condition_size
+        self.target_size = target_size
+        self.image_size = image_size
+        self.padding = padding
+        self.condition_type = condition_type
+        self.drop_text_prob = drop_text_prob
+        self.drop_image_prob = drop_image_prob
+        self.return_pil_image = return_pil_image
+
+        self.to_tensor = T.ToTensor()
+
+    def __len__(self):
+        return len(self.base_dataset)
+
+
     def __getitem__(self, idx):
         item = self.base_dataset[idx]
         target_image = item["image"]
@@ -165,7 +187,7 @@ def test_function(model, save_path, file_name):
     test_list.append((condition_list, prompt))
 
     condition_list = []
-    prompt = "It is outside with a landscape background."
+    prompt = ""
 
     for i, c_type in enumerate(condition_type):
         if c_type == "subject":
@@ -206,58 +228,6 @@ def test_function(model, save_path, file_name):
         file_path = os.path.join(save_path, f"{file_name}_fill_subject_{i}.jpg")
         res.images[0].save(file_path)
 
-def process_Subjects200K(dataset, padding, image_size):
-    """
-    Prepairs the dataset to join with the SynSet dataset for training
-    
-    :param dataset: Dataset class
-    :param padding: Padding size (from config)
-    :param image_size: Image size (from config)
-    :return: Dataset class with features "image", "description", "subject", "mask_bbox"
-    """
-    def separate_images(ds, padding, image_size):
-        new_images = []
-        subjects = []
-        for image in ds["image"]:
-            left_img = image.crop(
-                (
-                    padding,
-                    padding,
-                    image_size + padding,
-                    image_size + padding,
-                )
-            )
-            right_img = image.crop(
-                (
-                    image_size + padding * 2,
-                    padding,
-                    image_size * 2 + padding * 2,
-                    image_size + padding,
-                )
-            )
-            new_images.append(left_img)
-            subjects.append(right_img)
-        ds["image"] = new_images
-        ds["subject"] = subjects
-
-        return ds
-
-
-    dataset = dataset.select_columns(["image", "description"])
-    #dataset = dataset.map(lambda x: separate_images(x, padding, image_size), batched=True, num_proc=16)
-    dataset = dataset.map(lambda x: separate_images(x, padding, image_size), batched=True, batch_size=100, num_proc=16)
-
-    masks_list = [[] for _ in range(len(dataset))]
-
-    masks_dataset = Dataset.from_dict({"mask_bbox": masks_list})
-    dataset = dataset.add_column("mask_bbox", masks_dataset["mask_bbox"])
-
-    return dataset
-
-
-
-    
-
 
 def main():
     # Initialize
@@ -265,36 +235,14 @@ def main():
     training_config = config["train"]
     torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
 
-    # Initialize raw dataset
-    raw_dataset = load_dataset("/export/scratch/emironov/datasets/Subjects200K")
-
-    # Define filter function to filter out low-quality images from Subjects200K
-    def filter_func(item):
-        if not item.get("quality_assessment"):
-            return False
-        return all(
-            item["quality_assessment"].get(key, 0) >= 5
-            for key in ["compositeStructure", "objectConsistency", "imageQuality"]
-        )
-
-    # Filter dataset
-    if not os.path.exists("/export/scratch/emironov/cache/dataset"):
-        os.makedirs("/export/scratch/emironov/cache/dataset")
-    data_valid = raw_dataset["train"].filter(
-        filter_func,
-        num_proc=16,
-        cache_file_name="/export/scratch/emironov/cache/dataset/data_valid.arrow",
-    )
-
-    subject_ds = process_Subjects200K(data_valid, training_config["dataset"]["padding"], training_config["dataset"]["image_size"]) 
-
-    synset_dir = "/export/scratch/emironov/datasets/synset/SynsetSignsetGermany"
-    image_list_csv = "CsvFiles/cyclesAll_train.csv"
-
-    synset_ds = synset2hugging_face(synset_dir, image_list_csv)
-
+    print("Loading synset dataset...")
+    synset_ds = load_dataset("/export/scratch/emironov/datasets/synset_processed", split="train")
+    print("Loading subject dataset...")
+    subject_ds = load_dataset("/export/scratch/emironov/datasets/Subjects200K_processed", split="train")
+    print("Combining datasets...")
     ds = concatenate_datasets([subject_ds, synset_ds])
-   
+
+    print("Initializing...")
 
     # Initialize the dataset
     dataset = FillSubjectDataset(
@@ -322,6 +270,8 @@ def main():
         adapter_names=[None, None, *["default"] * cond_n],
         # In this setting, all the conditions are using the same LoRA adapter
     )
+
+    print("Starting training...")
 
     train(dataset, trainable_model, config, test_function)
 
