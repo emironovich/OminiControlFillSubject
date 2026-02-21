@@ -39,7 +39,7 @@ def separate_images(ds, padding, image_size):
 def process_Subjects200K(dataset, padding, image_size):
     """
     Prepairs the dataset to join with the SynSet dataset for training
-    
+
     :param dataset: Dataset class
     :param padding: Padding size (from config)
     :param image_size: Image size (from config)
@@ -59,12 +59,15 @@ def process_Subjects200K(dataset, padding, image_size):
 
 
 
-    
+
 
 
 def main():
     # Initialize raw dataset
     raw_dataset = load_dataset("/export/scratch/emironov/datasets/Subjects200K")
+    ds_train = raw_dataset["train"]
+    split = ds_train.train_test_split(test_size=0.02, seed=42)
+    raw_dataset = {"train": split["train"], "validation": split["test"]}
 
     # Define filter function to filter out low-quality images from Subjects200K
     def filter_func(item):
@@ -78,18 +81,29 @@ def main():
     # Filter dataset
     if not os.path.exists("/export/scratch/emironov/cache/dataset"):
         os.makedirs("/export/scratch/emironov/cache/dataset")
-    data_valid = raw_dataset["train"].filter(
-        filter_func,
-        num_proc=16,
-        cache_file_name="/export/scratch/emironov/cache/dataset/data_valid.arrow",
-    )
+
     padding = 8
     image_size = 512
 
-    subject_ds = process_Subjects200K(data_valid, padding, image_size) 
+    data_valid_val = raw_dataset["validation"].filter(
+        filter_func,
+        num_proc=16,
+        cache_file_name="/export/scratch/emironov/cache/dataset/data_valid_val.arrow",
+    )
+    subject_ds_val = process_Subjects200K(data_valid_val, padding, image_size)
 
     output_dir = "/export/scratch/emironov/datasets/Subjects200K_processed"
     os.makedirs(output_dir, exist_ok=True)
+
+    subject_ds_val.save_to_disk(os.path.join(output_dir, "validation"), num_shards=16)
+
+
+    data_valid = raw_dataset["train"].filter(
+        filter_func,
+        num_proc=16,
+        cache_file_name="/export/scratch/emironov/cache/dataset/data_valid_train.arrow",
+    )
+    subject_ds = process_Subjects200K(data_valid, padding, image_size)
 
     subject_ds.save_to_disk(os.path.join(output_dir, "train"), num_shards=16)
 
