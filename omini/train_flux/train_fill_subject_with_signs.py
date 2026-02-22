@@ -236,11 +236,15 @@ def main():
     torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
 
     print("Loading synset dataset...")
-    synset_ds = load_dataset("/export/scratch/emironov/datasets/synset_processed", split="train")
+    synset_ds = load_dataset("/export/scratch/emironov/datasets/synset_processed")
     print("Loading subject dataset...")
-    subject_ds = load_dataset("/export/scratch/emironov/datasets/Subjects200K_processed", split="train")
+    subject_ds = load_dataset("/export/scratch/emironov/datasets/Subjects200K_processed")
     print("Combining datasets...")
-    ds = concatenate_datasets([subject_ds, synset_ds])
+    ds = concatenate_datasets([subject_ds["train"], synset_ds["train"]])
+    ds_val = concatenate_datasets([subject_ds["validation"], synset_ds["validation"]])
+
+    print(f"Training dataset size: {len(ds)}")
+    print(f"Validation dataset size: {len(ds_val)}")
 
     print("Initializing...")
 
@@ -254,6 +258,18 @@ def main():
         condition_type=training_config["condition_type"],
         drop_text_prob=training_config["dataset"]["drop_text_prob"],
         drop_image_prob=training_config["dataset"]["drop_image_prob"],
+    )
+
+    val_dataset = FillSubjectDataset(
+        ds_val,
+        condition_size=training_config["dataset"]["condition_size"],
+        target_size=training_config["dataset"]["target_size"],
+        image_size=training_config["dataset"]["image_size"],
+        padding=training_config["dataset"]["padding"],
+        condition_type=training_config["condition_type"],
+        drop_text_prob=0.0,
+        drop_image_prob=0.0,
+        return_pil_image=False,
     )
 
     cond_n = len(training_config["condition_type"])
