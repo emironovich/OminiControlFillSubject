@@ -8,6 +8,7 @@ train:
   accumulate_grad_batches: 1
   dataloader_workers: 5
   save_interval: 1000
+  eval_interval: 100
   sample_interval: 100
   max_steps: -1
   gradient_checkpointing: true # (Turn off for faster training)

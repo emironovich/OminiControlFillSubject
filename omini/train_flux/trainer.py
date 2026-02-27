@@ -251,17 +251,34 @@ class OminiModel(L.LightningModule):
         )
         return step_loss
 
+    def validation_step(self, batch, batch_idx):
+        self.eval()
+        with torch.no_grad():
+            loss = self.training_step(batch, batch_idx)
+        # Ensure we return a tensor-wrapped loss for Lightning
+        if isinstance(loss, torch.Tensor):
+            return {"val_loss": loss.detach()}
+        else:
+            return {"val_loss": torch.tensor(loss)}
+
     def generate_a_sample(self):
         raise NotImplementedError("Generate a sample not implemented.")
 
 
 class TrainingCallback(L.Callback):
-    def __init__(self, run_name, training_config: dict = {}, test_function=None):
+    def __init__(
+        self,
+        run_name,
+        training_config: dict = {},
+        test_function=None,
+        val_dataloader=None,
+    ):
         self.run_name, self.training_config = run_name, training_config
 
         self.print_every_n_steps = training_config.get("print_every_n_steps", 10)
         self.save_interval = training_config.get("save_interval", 1000)
         self.sample_interval = training_config.get("sample_interval", 1000)
+        self.eval_interval = training_config.get("eval_interval", self.save_interval)
         self.save_path = training_config.get("save_path", "./output")
 
         self.wandb_config = training_config.get("wandb", None)
@@ -271,6 +288,15 @@ class TrainingCallback(L.Callback):
 
         self.total_steps = 0
         self.test_function = test_function
+        self.val_dataloader = val_dataloader
+        if self.val_dataloader is None:
+            print("TrainingCallback: no val_dataloader provided; validation hooks will be skipped")
+        # max number of validation batches to run (0 = run full val set)
+        self.val_max_batches = training_config.get("val_max_batches", 16)
+        if self.val_max_batches == 0:
+            print("TrainingCallback: val_max_batches=0 -> full validation dataset will be used")
+        else:
+            print(f"TrainingCallback: validating up to {self.val_max_batches} batches per eval")
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         gradient_size = 0
@@ -313,6 +339,17 @@ class TrainingCallback(L.Callback):
                 f"{self.save_path}/{self.run_name}/ckpt/{self.total_steps}"
             )
 
+        # Run validation and log val_loss to WandB (run locally to avoid trainer re-entrancy)
+        if self.val_dataloader is not None and self.total_steps % self.eval_interval == 0:
+            print(
+                f"Epoch: {trainer.current_epoch}, Steps: {self.total_steps} - Running validation"
+            )
+
+            val_loss = self._run_validation(pl_module)
+            if self.use_wandb and val_loss is not None:
+                wandb.log({"val_loss": val_loss}, step=getattr(trainer, "global_step", self.total_steps))
+            pl_module.train()
+
         # Generate and save a sample image at specified intervals
         if self.total_steps % self.sample_interval == 0 and self.test_function:
             print(
@@ -326,8 +363,85 @@ class TrainingCallback(L.Callback):
             )
             pl_module.train()
 
+    def _move_batch_to_device(self, batch, device):
+        # Recursively move tensors in batch to device
+        if isinstance(batch, torch.Tensor):
+            return batch.to(device)
+        elif isinstance(batch, dict):
+            return {k: self._move_batch_to_device(v, device) for k, v in batch.items()}
+        elif isinstance(batch, list):
+            return [self._move_batch_to_device(v, device) for v in batch]
+        elif isinstance(batch, tuple):
+            return tuple(self._move_batch_to_device(v, device) for v in batch)
+        else:
+            return batch
 
-def train(dataset, trainable_model, config, test_function):
+    def _run_validation(self, pl_module):
+        # Run a lightweight validation loop over val_dataloader and return average val_loss
+        pl_module.eval()
+        device = getattr(pl_module, "device", None)
+        is_cuda = device is not None and "cuda" in str(device)
+        total = 0.0
+        count = 0
+        import time
+        start_time = time.time()
+        with torch.no_grad():
+            for i, batch in enumerate(self.val_dataloader):
+                # optionally limit number of validation batches
+                if self.val_max_batches and self.val_max_batches > 0 and i >= self.val_max_batches:
+                    break
+                # Sanitize long text fields to avoid tokenizer/CLIP verbose truncation prints
+                try:
+                    max_seq = pl_module.model_config.get("max_sequence_length", 512)
+                except Exception:
+                    max_seq = 512
+                max_chars = max_seq * 4
+                if isinstance(batch, dict) and "description" in batch:
+                    desc = batch["description"]
+                    if isinstance(desc, str):
+                        if len(desc) > max_chars:
+                            batch["description"] = desc[:max_chars]
+                    elif isinstance(desc, (list, tuple)):
+                        batch["description"] = [d[:max_chars] if isinstance(d, str) and len(d) > max_chars else d for d in desc]
+
+                if device is not None:
+                    batch = self._move_batch_to_device(batch, device)
+                out = pl_module.validation_step(batch, i)
+                # Handle different return types
+                if out is None:
+                    continue
+                if isinstance(out, dict):
+                    val_loss = out.get("val_loss") or out.get("loss")
+                else:
+                    val_loss = out
+                if val_loss is None:
+                    continue
+                if isinstance(val_loss, torch.Tensor):
+                    value = float(val_loss.detach().cpu().item())
+                else:
+                    try:
+                        value = float(val_loss)
+                    except Exception:
+                        continue
+                total += value
+                count += 1
+        # sync and report timing
+        if is_cuda:
+            try:
+                torch.cuda.synchronize()
+            except Exception:
+                pass
+        elapsed = time.time() - start_time
+        if count > 0:
+            print(f"Validation: processed {count} batches in {elapsed:.2f}s ({elapsed/count:.3f}s per batch), avg val_loss={total/count:.6f}")
+        else:
+            print(f"Validation: processed 0 batches in {elapsed:.2f}s")
+        if count == 0:
+            return None
+        return total / count
+
+
+def train(dataset, trainable_model, config, test_function, val_dataset=None):
     # Initialize
     is_main_process, rank = get_rank() == 0, get_rank()
     torch.cuda.set_device(rank)
@@ -353,10 +467,22 @@ def train(dataset, trainable_model, config, test_function):
         shuffle=True,
         num_workers=training_config["dataloader_workers"],
     )
+    val_loader = None
+    if val_dataset is not None:
+        val_workers = training_config.get("val_dataloader_workers", training_config["dataloader_workers"])
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=training_config.get("batch_size", 1),
+            shuffle=False,
+            num_workers=val_workers,
+        )
 
     # Callbacks for testing and saving checkpoints
     if is_main_process:
-        callbacks = [TrainingCallback(run_name, training_config, test_function)]
+        callbacks = [
+            TrainingCallback(run_name, training_config, test_function, val_dataloader=val_loader)
+        ]
+    print(f"val_loader: {'present' if val_loader is not None else 'none'}")
 
     # Initialize trainer
     trainer = L.Trainer(
@@ -380,5 +506,7 @@ def train(dataset, trainable_model, config, test_function):
         with open(f"{save_path}/{run_name}/config.yaml", "w") as f:
             yaml.dump(config, f)
 
-    # Start training
-    trainer.fit(trainable_model, train_loader)
+    if val_loader is not None:
+        trainer.fit(trainable_model, train_loader, val_dataloaders=[val_loader])
+    else:
+        trainer.fit(trainable_model, train_loader)

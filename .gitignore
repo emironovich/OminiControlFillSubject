@@ -1,1 +1,5 @@
 __pycache__
+*.log
+2026*.txt
+cache/
+wandb/

@@ -241,7 +241,8 @@ def main():
     subject_ds = load_dataset("/export/scratch/emironov/datasets/Subjects200K_processed")
     print("Combining datasets...")
     ds = concatenate_datasets([subject_ds["train"], synset_ds["train"]])
-    ds_val = concatenate_datasets([subject_ds["validation"], synset_ds["validation"]])
+    #ds_val = concatenate_datasets([subject_ds["validation"], synset_ds["validation"]])
+    ds_val = synset_ds["validation"]
 
     print(f"Training dataset size: {len(ds)}")
     print(f"Validation dataset size: {len(ds_val)}")
@@ -289,7 +290,7 @@ def main():
 
     print("Starting training...")
 
-    train(dataset, trainable_model, config, test_function)
+    train(dataset, trainable_model, config, test_function, val_dataset=val_dataset)
 
 
 if __name__ == "__main__":
